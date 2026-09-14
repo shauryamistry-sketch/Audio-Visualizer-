@@ -41,8 +41,9 @@ font = pygame.font.SysFont("Consolas", 10, bold=True)
 hwnd = pygame.display.get_wm_info()["window"]
 
 GWL_EXSTYLE = -20
-WS_EX_LAYERED = 0X00080000
-ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED)
+WS_EX_LAYERED = 0x00080000
+WS_EX_NOACTIVATE = 0x08000000
+ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED | WS_EX_NOACTIVATE)
 
 OPACITY = 175
 ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, 0, OPACITY, 0x00000002)
@@ -68,20 +69,18 @@ def start_native_drag():
     ctypes.windll.user32.ReleaseCapture()
     ctypes.windll.user32.SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0)
 
-BG_COLOR = (4,12,6)
-GRID_COLOR = (12, 35, 18)
-GLOW_COLOR = (0, 190, 75, 70)
-TRACE_COLOR = (140, 255, 180)
+BG_COLOR = (0,0,0)
+BEAM_CORE = (230, 255, 235)
+BEAM_INNER = (50, 255, 100, 160)
+BEAM_OUTER = (0, 200, 60, 45)
 TEXT_COLOR = (80, 170, 110)
 
-def draw_grid():
-    grid_size = 25
-    for x in range(0, WIDTH, grid_size):
-        pygame.draw.line(screen, GRID_COLOR, (x, 0), (x, HEIGHT), 1)
-    for y in range(0, HEIGHT, grid_size):
-        pygame.draw.line(screen, GRID_COLOR, (0,y), (WIDTH, y), 1)
-    center_y = HEIGHT//2
-    pygame.draw.line(screen, (22, 55, 30), (0, center_y), (WIDTH, center_y), 1)
+trail_surface = pygame.Surface((WIDTH, HEIGHT))
+trail_surface.fill(BG_COLOR)
+
+fade_mask = pygame.Surface((WIDTH, HEIGHT))
+fade_mask.set_alpha(32)
+fade_mask.fill(BG_COLOR)
 
 is_locked = False
 frame_counter = 0
@@ -98,36 +97,77 @@ while running:
                 start_native_drag()
                 enforce_topmost()
 
-    frame_counter += 1
-    if frame_counter % 30 == 0:
-        enforce_topmost()
+
+    enforce_topmost()
+
     try:
         raw_data = stream.read(CHUNK, exception_on_overflow=False)
         audio_samples = np.frombuffer(raw_data, dtype=np.int16)
     except IOError:
         audio_samples = np.zeros(CHUNK)
-    GAIN = 5.0
+    center_x = WIDTH//2
     center_y = HEIGHT//2
     points = []
 
-    step = len(audio_samples) / WIDTH
-    for i in range(WIDTH):
-        sample_idx = int(i * step)
-        normalized_sample = audio_samples[sample_idx]/ 32768.0
-        amplified_sample = normalized_sample*GAIN
+    normalized = audio_samples/32768.0
+    volume = np.sqrt(np.mean(normalized**2))
 
-        y_offset = amplified_sample * (HEIGHT /2)
-        screen_y = int(np.clip(center_y - y_offset, 5, HEIGHT-5))
-        points.append((i, screen_y))
+    SILENCE_THRESHOLD = 0.008
 
-    screen.fill(BG_COLOR)
-    draw_grid()
+    if volume < SILENCE_THRESHOLD:
+        jitter_x = np.random.uniform(-0.8, 0.8)
+        jitter_y = np.random.uniform(-0.8, 0.8)
+        points = [(int(center_x + jitter_x), int(center_y + jitter_y))]
+    else:
+        SPREAD_X = 210.0
+        SPREAD_Y = 130.0
 
-    if len(points) > 1:
-        glow_surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        pygame.draw.lines(glow_surf, GLOW_COLOR, False, points, 4)
-        screen.blit(glow_surf, (0,0))
-        pygame.draw.lines(screen, TRACE_COLOR, False, points, 1)
+        step = 64
+        sub_samples = normalized[::step]
+        num_pts = len(sub_samples)
+        
+       
+        delay = max(2, num_pts // 6)
+
+        for i in range(num_pts - delay):
+            raw_x = sub_samples[i]
+            raw_y = sub_samples[i + delay]
+
+            
+            x_val = np.sign(raw_x) * (np.abs(raw_x) ** 0.65) * SPREAD_X
+            y_val = np.sign(raw_y) * (np.abs(raw_y) ** 0.65) * SPREAD_Y
+
+            pt_x = int(np.clip(center_x + x_val, 6, WIDTH - 6))
+            pt_y = int(np.clip(center_y - y_val, 6, HEIGHT - 6))
+            points.append((pt_x, pt_y))
+            
+
+    trail_surface.blit(fade_mask, (0,0))
+
+    if len(points) == 1:
+        spot = points[0]
+        glow_outer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        pygame.draw.circle(glow_outer, BEAM_OUTER, spot, 8)
+        trail_surface.blit(glow_outer, (0, 0))
+
+        glow_inner = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        pygame.draw.circle(glow_inner, BEAM_INNER, spot, 4)
+        trail_surface.blit(glow_inner, (0, 0))
+
+        pygame.draw.circle(trail_surface, BEAM_CORE, spot, 1)
+
+    elif len(points) > 1:
+        glow_outer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        pygame.draw.lines(glow_outer, BEAM_OUTER, False, points, 6)
+        trail_surface.blit(glow_outer, (0, 0))
+
+        glow_inner = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        pygame.draw.lines(glow_inner, BEAM_INNER, False, points, 3)
+        trail_surface.blit(glow_inner, (0, 0))
+
+        pygame.draw.lines(trail_surface, BEAM_CORE, False, points, 1)
+
+    screen.blit(trail_surface, (0,0))
 
     status_label = "LOCKED" if is_locked else "DRAGGABLE"
     status_surf = font.render(status_label, True, TEXT_COLOR)

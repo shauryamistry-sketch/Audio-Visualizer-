@@ -4,15 +4,15 @@ It captures the system audio and displayes it as a live waveform in a pygame win
 The original inspiration for this project was an oscilloscope, which I have attempted to recreate.
 
 System Audio
-     👇
+     ->
 WASAPI Loopback
-     👇
+     ->
 PyAudioWPatch
-     👇
+  ->   
 NumPy
-     👇
+     ->
 Pygame
-     👇
+     ->
 Wave
 
 Requirements:
